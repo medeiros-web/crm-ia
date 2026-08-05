@@ -8,12 +8,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:api": "node scripts/compile-api.mjs",
     "preview": "vite preview",
+    "start": "node server.mjs",
     "validate:sql": "node validate-sql.mjs",
     "db:push": "node scripts/push-migrations.mjs",
     "functions:deploy": "node scripts/deploy-functions.mjs"
   },
   "dependencies": {
+    "express": "^4.19.2",
     "@supabase/supabase-js": "^2.45.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -29,6 +32,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "esbuild": "^0.24.0",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.9.0",
