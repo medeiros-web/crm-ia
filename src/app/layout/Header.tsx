@@ -21,7 +21,7 @@ export function Header({ onMenuClick }: HeaderProps) {
 
   return (
     <header
-      className="h-16 shrink-0 glass-surface border-b border-[rgba(59,130,246,0.08)] flex items-center justify-between px-4 sm:px-6 gap-4"
+      className="min-h-16 shrink-0 glass-surface border-b border-[rgba(59,130,246,0.08)] flex items-center justify-between px-4 sm:px-6 gap-4 pt-[env(safe-area-inset-top)]"
       role="banner"
     >
       <div className="flex items-center gap-2">
