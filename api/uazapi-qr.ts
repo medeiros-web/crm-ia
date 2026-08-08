@@ -4,11 +4,14 @@ import { requireAdmin } from '../src/lib/admin-auth.js';
 // Pareamento por QR Code da instancia Uazapi (ou qualquer bridge compativel
 // com o mesmo contrato — ver supabase/functions/_shared/whatsapp/uazapi-provider.ts
 // e a ponte self-hosted em VPS que fala esse mesmo protocolo).
-// GET  aqui  → { configured, phase, qrcode } — poll do card em /settings/credentials.
+// GET  aqui  → { configured, phase, qrcode, ignoreGroups } — poll do card em
+//              /settings/credentials.
 // POST aqui  → inicia o pareamento (POST /instance/init na bridge) e registra o
 //              webhook de inbound automaticamente (mesmo endpoint usado por
 //              api/uazapi-status.ts).
 // POST {action:'logout'} → encerra a sessao (POST /instance/logout na bridge).
+// POST {action:'set-ignore-groups', value:boolean} → liga/desliga o filtro de
+//      mensagens de grupo na bridge (GET/POST /settings).
 
 type ApiRequest = {
   method?: string;
@@ -47,7 +50,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       });
     }
 
-    const body = (req.body ?? {}) as { action?: string };
+    const body = (req.body ?? {}) as { action?: string; value?: boolean };
 
     if (req.method === 'POST' && body.action === 'logout') {
       const r = await fetch(`${serverUrl}/instance/logout`, {
@@ -59,6 +62,20 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         return res.status(200).json({ success: false, message: `Falha ao desconectar (HTTP ${r.status}).` });
       }
       return res.status(200).json({ success: true });
+    }
+
+    if (req.method === 'POST' && body.action === 'set-ignore-groups') {
+      const r = await fetch(`${serverUrl}/settings`, {
+        method: 'POST',
+        headers: { token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ignoreGroups: Boolean(body.value) }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const settingsBody = (await r.json().catch(() => ({}))) as { ignoreGroups?: boolean };
+      if (!r.ok) {
+        return res.status(200).json({ success: false, message: `Falha ao atualizar (HTTP ${r.status}).` });
+      }
+      return res.status(200).json({ success: true, ignoreGroups: Boolean(settingsBody.ignoreGroups) });
     }
 
     if (req.method === 'POST') {
@@ -95,18 +112,19 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     }
 
     // GET — status do pareamento para o polling do card.
-    const r = await fetch(`${serverUrl}/instance/qrcode`, {
-      headers: { token },
-      signal: AbortSignal.timeout(10000),
-    });
-    const qrBody = (await r.json().catch(() => ({}))) as { qrcode?: string | null; phase?: string };
-    if (!r.ok) {
+    const [qrRes, settingsRes] = await Promise.all([
+      fetch(`${serverUrl}/instance/qrcode`, { headers: { token }, signal: AbortSignal.timeout(10000) }),
+      fetch(`${serverUrl}/settings`, { headers: { token }, signal: AbortSignal.timeout(10000) }).catch(() => null),
+    ]);
+    const qrBody = (await qrRes.json().catch(() => ({}))) as { qrcode?: string | null; phase?: string };
+    const settingsBody = (await settingsRes?.json().catch(() => ({}))) as { ignoreGroups?: boolean } | undefined;
+    if (!qrRes.ok) {
       return res.status(200).json({
         success: true,
         configured: true,
         phase: 'error',
         qrcode: null,
-        error: `Bridge respondeu ${r.status}`,
+        error: `Bridge respondeu ${qrRes.status}`,
       });
     }
     return res.status(200).json({
@@ -114,6 +132,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       configured: true,
       phase: qrBody.phase ?? 'idle',
       qrcode: qrBody.qrcode ?? null,
+      ignoreGroups: settingsBody?.ignoreGroups ?? true,
     });
   } catch (err) {
     return res.status(500).json({

@@ -19,6 +19,7 @@ type QrPairingResponse = {
   qrcode?: string | null;
   message?: string;
   error?: string;
+  ignoreGroups?: boolean;
 };
 
 // Card de saúde da conexão Uazapi (API não-oficial). O status vem de
@@ -32,6 +33,8 @@ export function UazapiCard({ refreshKey = 0 }: { refreshKey?: number }) {
   const [pairing, setPairing] = useState(false);
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [ignoreGroups, setIgnoreGroups] = useState<boolean | null>(null);
+  const [togglingGroups, setTogglingGroups] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -54,11 +57,50 @@ export function UazapiCard({ refreshKey = 0 }: { refreshKey?: number }) {
     }
   }, [session]);
 
+  const loadGroupSetting = useCallback(async () => {
+    if (!session) return;
+    try {
+      const res = await fetch('/api/uazapi-qr', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const body = (await res.json()) as QrPairingResponse;
+      if (res.ok && body.configured) setIgnoreGroups(body.ignoreGroups ?? true);
+    } catch {
+      // informativo — o switch so aparece quando conseguimos ler o valor
+    }
+  }, [session]);
+
   useEffect(() => {
     void load();
+    void loadGroupSetting();
     stopPolling();
     setQrImage(null);
-  }, [load, refreshKey, stopPolling]);
+  }, [load, loadGroupSetting, refreshKey, stopPolling]);
+
+  const toggleIgnoreGroups = async () => {
+    if (!session || ignoreGroups === null) return;
+    const next = !ignoreGroups;
+    setTogglingGroups(true);
+    setIgnoreGroups(next);
+    try {
+      const res = await fetch('/api/uazapi-qr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ action: 'set-ignore-groups', value: next }),
+      });
+      const body = (await res.json()) as QrPairingResponse;
+      if (!res.ok || !body.success) throw new Error(body.message ?? 'Falha ao atualizar.');
+      setIgnoreGroups(body.ignoreGroups ?? next);
+      toast.success(next ? 'Mensagens de grupo serão ignoradas.' : 'Mensagens de grupo serão recebidas.');
+    } catch (err) {
+      setIgnoreGroups(!next);
+      toast.error('Falha ao atualizar', {
+        description: err instanceof Error ? err.message : 'Erro interno',
+      });
+    } finally {
+      setTogglingGroups(false);
+    }
+  };
 
   useEffect(() => stopPolling, [stopPolling]);
 
@@ -240,6 +282,31 @@ export function UazapiCard({ refreshKey = 0 }: { refreshKey?: number }) {
                   {disconnecting ? 'Desconectando…' : 'Desconectar WhatsApp'}
                 </button>
               )}
+
+              {ignoreGroups !== null ? (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[rgba(59,130,246,0.12)] bg-white/[0.02] p-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-[#F8FAFC]">Ignorar mensagens de grupo</div>
+                    <p className="text-[12px] text-[var(--color-text-secondary)]">
+                      Quando ligado, mensagens vindas de grupos do WhatsApp não entram no inbox nem
+                      acionam a IA.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void toggleIgnoreGroups()}
+                    disabled={togglingGroups}
+                    className={[
+                      'shrink-0 rounded-lg px-4 py-2 text-sm font-semibold transition disabled:opacity-50',
+                      ignoreGroups
+                        ? 'bg-gradient-to-br from-[#1E3A8A] to-[#3B82F6] text-white'
+                        : 'border border-[rgba(59,130,246,0.25)] text-[#94A3B8] hover:border-[#3B82F6] hover:text-[#F8FAFC]',
+                    ].join(' ')}
+                  >
+                    {togglingGroups ? '…' : ignoreGroups ? 'Ativado' : 'Desativado'}
+                  </button>
+                </div>
+              ) : null}
 
               {status.webhook_url ? (
                 <div className="mt-3 space-y-2">
