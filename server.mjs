@@ -55,6 +55,11 @@ async function loadApis() {
     app.all('/api/uazapi-status', vercelAdapter(uazapiStatus));
   } catch (e) { console.warn('uazapi-status handler failed:', e.message); }
 
+  try {
+    const { default: uazapiQr } = await import('./api-compiled/uazapi-qr.js');
+    app.all('/api/uazapi-qr', vercelAdapter(uazapiQr));
+  } catch (e) { console.warn('uazapi-qr handler failed:', e.message); }
+
   // Fallback para rotas de API não encontradas
   app.all('/api/*', (req, res) => {
     res.status(404).json({ error: 'API route not found' });

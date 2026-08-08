@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Copy, Loader2, Smartphone } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Copy, Loader2, QrCode, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/app/providers/AuthProvider';
 
@@ -12,6 +12,15 @@ type UazapiStatus = {
   error?: string;
 };
 
+type QrPairingResponse = {
+  success: boolean;
+  configured: boolean;
+  phase?: string;
+  qrcode?: string | null;
+  message?: string;
+  error?: string;
+};
+
 // Card de saúde da conexão Uazapi (API não-oficial). O status vem de
 // GET /instance/status via /api/uazapi-status (token nunca no browser).
 // Inclui a URL do webhook a cadastrar na Uazapi + registro automático.
@@ -20,6 +29,17 @@ export function UazapiCard({ refreshKey = 0 }: { refreshKey?: number }) {
   const { session } = useAuth();
   const [status, setStatus] = useState<UazapiStatus | null>(null);
   const [registering, setRegistering] = useState(false);
+  const [pairing, setPairing] = useState(false);
+  const [qrImage, setQrImage] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -36,7 +56,81 @@ export function UazapiCard({ refreshKey = 0 }: { refreshKey?: number }) {
 
   useEffect(() => {
     void load();
-  }, [load, refreshKey]);
+    stopPolling();
+    setQrImage(null);
+  }, [load, refreshKey, stopPolling]);
+
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const pollQrCode = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      if (!session) return;
+      try {
+        const res = await fetch('/api/uazapi-qr', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const body = (await res.json()) as QrPairingResponse;
+        if (!res.ok || !body.success) return;
+        if (body.phase === 'connected') {
+          stopPolling();
+          setQrImage(null);
+          setPairing(false);
+          toast.success('WhatsApp conectado!');
+          void load();
+          return;
+        }
+        setQrImage(body.qrcode ?? null);
+      } catch {
+        // poll seguinte tenta de novo
+      }
+    }, 3000);
+  }, [session, stopPolling, load]);
+
+  const startPairing = async () => {
+    if (!session) return;
+    setPairing(true);
+    try {
+      const res = await fetch('/api/uazapi-qr', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const body = (await res.json()) as QrPairingResponse;
+      if (!res.ok || !body.success) {
+        throw new Error(body.message ?? 'Falha ao iniciar o pareamento.');
+      }
+      pollQrCode();
+    } catch (err) {
+      setPairing(false);
+      toast.error('Falha ao conectar', {
+        description: err instanceof Error ? err.message : 'Erro interno',
+      });
+    }
+  };
+
+  const disconnect = async () => {
+    if (!session) return;
+    setDisconnecting(true);
+    try {
+      const res = await fetch('/api/uazapi-qr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ action: 'logout' }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.message ?? 'Falha ao desconectar.');
+      toast.success('WhatsApp desconectado.');
+      stopPolling();
+      setQrImage(null);
+      await load();
+    } catch (err) {
+      toast.error('Falha ao desconectar', {
+        description: err instanceof Error ? err.message : 'Erro interno',
+      });
+    } finally {
+      setDisconnecting(false);
+    }
+  };
 
   const registerWebhook = async () => {
     setRegistering(true);
@@ -106,6 +200,47 @@ export function UazapiCard({ refreshKey = 0 }: { refreshKey?: number }) {
               {status.error ? (
                 <p className="mt-1 text-sm text-[#EF4444]">{status.error}</p>
               ) : null}
+
+              {!status.connected ? (
+                <div className="mt-3 space-y-3">
+                  {qrImage ? (
+                    <div className="flex flex-col items-start gap-2">
+                      <img
+                        src={qrImage}
+                        alt="QR Code para conectar o WhatsApp"
+                        className="h-56 w-56 rounded-lg border border-[rgba(59,130,246,0.2)] bg-white p-2"
+                      />
+                      <p className="text-[13px] text-[var(--color-text-secondary)]">
+                        Abra o WhatsApp no celular → Aparelhos conectados → Conectar um aparelho, e
+                        escaneie o código acima. Ele expira em alguns segundos e é renovado
+                        automaticamente.
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => void startPairing()}
+                      disabled={pairing}
+                      className="flex items-center gap-2 rounded-lg bg-gradient-to-br from-[#1E3A8A] to-[#3B82F6] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+                    >
+                      {pairing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <QrCode className="h-4 w-4" />
+                      )}
+                      {pairing ? 'Gerando QR Code…' : 'Conectar via QR Code'}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => void disconnect()}
+                  disabled={disconnecting}
+                  className="mt-3 rounded-lg border border-[rgba(239,68,68,0.3)] px-4 py-2 text-sm font-semibold text-[#EF4444] transition hover:bg-[rgba(239,68,68,0.08)] disabled:opacity-50"
+                >
+                  {disconnecting ? 'Desconectando…' : 'Desconectar WhatsApp'}
+                </button>
+              )}
+
               {status.webhook_url ? (
                 <div className="mt-3 space-y-2">
                   <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-secondary)]">
